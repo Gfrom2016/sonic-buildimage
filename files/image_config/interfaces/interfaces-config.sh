@@ -47,8 +47,12 @@ if [[ $(ifquery --running eth0) ]]; then
     ifdown --force eth0
 fi
 
-# Check if ZTP DHCP policy has been installed
-if [[ -e /etc/network/ifupdown2/policy.d/ztp_dhcp.json ]]; then
+# Get device type to skip front-panel-specific steps on devices without data-plane interfaces
+DEVICE_TYPE=$(sonic-cfggen -d -v "DEVICE_METADATA['localhost']['type']" 2>/dev/null || true)
+
+# Check if ZTP DHCP policy has been installed.
+# NetworkBmc devices have no front-panel Ethernet ports, so skip ZTP port data collection.
+if [[ "${DEVICE_TYPE}" != "NetworkBmc" && -e /etc/network/ifupdown2/policy.d/ztp_dhcp.json ]]; then
     # Obtain port operational state information
     redis-dump -d 0 -k "PORT_TABLE:Ethernet*"  -y > /tmp/ztp_port_data.json
 
@@ -75,9 +79,12 @@ sonic-cfggen $CFGGEN_PARAMS
 [[ -f /var/run/dhclient.eth0.pid ]] && kill `cat /var/run/dhclient.eth0.pid` && rm -f /var/run/dhclient.eth0.pid
 [[ -f /var/run/dhclient6.eth0.pid ]] && kill `cat /var/run/dhclient6.eth0.pid` && rm -f /var/run/dhclient6.eth0.pid
 
-for intf_pid in $(ls -1 /var/run/dhclient*.Ethernet*.pid 2> /dev/null); do
-    [[ -f ${intf_pid} ]] && kill `cat ${intf_pid}` && rm -f ${intf_pid}
-done
+# NetworkBmc devices have no front-panel Ethernet ports; skip killing stale dhclient PIDs for them.
+if [[ "${DEVICE_TYPE}" != "NetworkBmc" ]]; then
+    for intf_pid in $(ls -1 /var/run/dhclient*.Ethernet*.pid 2> /dev/null); do
+        [[ -f ${intf_pid} ]] && kill `cat ${intf_pid}` && rm -f ${intf_pid}
+    done
+fi
 
 /usr/bin/resolv-config.sh cleanup
 # Restore DNS configuration update to the previous state.
